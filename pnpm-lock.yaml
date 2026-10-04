@@ -31,7 +31,7 @@ importers:
         specifier: ^25.5.0
         version: 25.9.1
       '@vitest/coverage-v8':
-        specifier: ^4.1.5
+        specifier: ^4.1.8
         version: 4.1.8(vitest@4.1.8)
       fast-glob:
         specifier: ^3.3.3
@@ -61,7 +61,7 @@ importers:
         specifier: ^6.0.2
         version: 6.0.3
       vitest:
-        specifier: ^4.1.5
+        specifier: ^4.1.8
         version: 4.1.8(@types/node@25.9.1)(@vitest/coverage-v8@4.1.8)(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.0)(sass@1.100.0)(tsx@4.22.4))
 
 packages:
