@@ -1,5 +1,5 @@
-import createExternalOptionFunction from '@niche-works/dev/createExternalOptionFunction';
-import distPackage from '@niche-works/rollup-plugin-dist-package';
+import createExternalOptionFunction from '@fringeworks/dev/createExternalOptionFunction';
+import distPackage from '@fringeworks/rollup-plugin-dist-package';
 import copy from 'rollup-plugin-copy';
 import { defineConfig } from 'tsdown';
 

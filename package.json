@@ -1,13 +1,13 @@
 {
-  "name": "@niche-works/event",
-  "version": "0.1.2",
+  "name": "@fringeworks/event",
+  "version": "0.8.0",
   "private": true,
   "keywords": [
     "event"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mitsuhiroseino/niche-works-event.git"
+    "url": "git+https://github.com/fringeworks-js/event.git"
   },
   "license": "MIT",
   "author": "Mitsuhiro Seino",
@@ -32,8 +32,8 @@
     "type-fest": "^5.6.0"
   },
   "devDependencies": {
-    "@niche-works/dev": "^0.5.5",
-    "@niche-works/rollup-plugin-dist-package": "^0.2.2",
+    "@fringeworks/dev": "^0.8.0",
+    "@fringeworks/rollup-plugin-dist-package": "^0.8.0",
     "@types/node": "^25.5.0",
     "@vitest/coverage-v8": "^4.1.8",
     "fast-glob": "^3.3.3",
@@ -47,5 +47,5 @@
     "typescript": "^6.0.2",
     "vitest": "^4.1.8"
   },
-  "packageManager": "pnpm@10.32.1"
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
 }
