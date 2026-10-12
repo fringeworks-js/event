@@ -1,44 +1,7 @@
 {
+  "extends": "@fringeworks/dev/tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "useDefineForClassFields": true,
-    "module": "ESNext",
-    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
-    "types": ["node"],
-    "skipLibCheck": true,
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    /* Source */
-    "rootDir": "src",
-    "outDir": "dist",
-    "declarationDir": "dist",
-    "typeRoots": ["./node_modules/@types"],
-    "jsx": "react-jsx",
-    "allowJs": true,
-    "checkJs": true,
-    "declaration": true,
-    "declarationMap": false,
-    "sourceMap": false,
-    "inlineSources": false,
-    "removeComments": false,
-    "importHelpers": true,
-    "noImplicitAny": false,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strictNullChecks": false,
-    "strictPropertyInitialization": false,
-    "preserveSymlinks": false
+    "lib": ["ES2021", "ESNext.Disposable", "DOM", "DOM.Iterable"]
   },
   "include": ["src", "globals.d.ts"]
 }

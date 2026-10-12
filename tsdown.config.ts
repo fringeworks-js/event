@@ -1,4 +1,4 @@
-import createExternalOptionFunction from '@fringeworks/dev/createExternalOptionFunction';
+import createExternal from '@fringeworks/dev/createExternal';
 import distPackage from '@fringeworks/rollup-plugin-dist-package';
 import copy from 'rollup-plugin-copy';
 import { defineConfig } from 'tsdown';
@@ -17,7 +17,7 @@ export default defineConfig({
   outDir: 'dist',
   minify: false,
   inputOptions: {
-    external: createExternalOptionFunction(),
+    external: createExternal(),
   },
   outputOptions: {
     preserveModules: true,
