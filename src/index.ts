@@ -1,2 +1,2 @@
-export { default as EventDispatcher } from './EventDispatcher';
+export * from './EventDispatcher';
 export type * from './types';
