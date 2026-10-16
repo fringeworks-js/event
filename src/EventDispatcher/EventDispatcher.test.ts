@@ -1,4 +1,9 @@
-import type { EventDispatcherLike, EventInfo, Evented } from '../types';
+import type {
+  EventDispatcherLike,
+  EventInfo,
+  EventSubscribable,
+  Evented,
+} from '../types';
 import EventDispatcher from './EventDispatcher';
 
 // テスト用イベントマップ
@@ -156,6 +161,18 @@ describe('EventDispatcher', () => {
         dispatcher.dispatch('click', { x: 10, y: 20 });
         expect(handler).toHaveBeenCalledOnce();
       });
+
+      it('登録済みのイベントは重複として無視され、残りのイベントだけがonceになる', () => {
+        const handler = vi.fn();
+        dispatcher.on('click', handler);
+        dispatcher.on(['click', 'change'], handler, { once: true });
+        dispatcher.dispatch('click', { x: 10, y: 20 });
+        dispatcher.dispatch('click', { x: 10, y: 20 });
+        dispatcher.dispatch('change', { value: 'a' });
+        dispatcher.dispatch('change', { value: 'b' });
+        // click は既存の登録のまま毎回呼ばれ、change は once で1回だけ呼ばれる
+        expect(handler).toHaveBeenCalledTimes(3);
+      });
     });
 
     describe('signal', () => {
@@ -269,6 +286,39 @@ describe('EventDispatcher', () => {
       const handler = vi.fn();
       expect(() => dispatcher.off('click', { handler })).not.toThrow();
     });
+
+    it('ownerがundefinedの場合は何も削除しない', () => {
+      const handler = vi.fn();
+      dispatcher.on('click', handler);
+      const owner: object | undefined = undefined;
+      dispatcher.off({ owner });
+      dispatcher.off('click', { owner });
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('handlerがundefinedの場合は何も削除しない', () => {
+      const handler = vi.fn();
+      dispatcher.on('click', handler);
+      dispatcher.off({ handler: undefined as any });
+      dispatcher.off('click', { handler: undefined as any });
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -------------------------
+  // hasHandlers
+  // -------------------------
+  describe('hasHandlers', () => {
+    it('ハンドラーが登録されているかどうかを返す', () => {
+      expect(dispatcher.hasHandlers('click')).toBe(false);
+      const off = dispatcher.on('click', vi.fn());
+      expect(dispatcher.hasHandlers('click')).toBe(true);
+      expect(dispatcher.hasHandlers('change')).toBe(false);
+      off();
+      expect(dispatcher.hasHandlers('click')).toBe(false);
+    });
   });
 
   // -------------------------
@@ -365,13 +415,46 @@ describe('EventDispatcher', () => {
       expect(handler2).not.toHaveBeenCalled();
     });
 
-    it('dispatchの実行中にoffが呼ばれても同回のdispatchには影響しない', () => {
+    it('dispatchの実行中にoffされたハンドラーは同回のdispatchでも呼ばれない', () => {
       const handler2 = vi.fn();
       const handler1 = vi.fn(() => {
         dispatcher.off('click', { handler: handler2 });
       });
       dispatcher.on('click', handler1);
       dispatcher.on('click', handler2);
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler2).not.toHaveBeenCalled();
+    });
+
+    it('dispatchの実行中に別のイベントからだけoffされたハンドラーは呼ばれる', () => {
+      const handler2 = vi.fn();
+      const handler1 = vi.fn(() => {
+        dispatcher.off('change', { handler: handler2 });
+      });
+      dispatcher.on('click', handler1);
+      dispatcher.on(['click', 'change'], handler2);
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler2).toHaveBeenCalledOnce();
+    });
+
+    it('dispatchの実行中にdisposeされると残りのハンドラーは呼ばれない', () => {
+      const handler2 = vi.fn();
+      dispatcher.on('click', () => dispatcher.dispose());
+      dispatcher.on('click', handler2);
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler2).not.toHaveBeenCalled();
+    });
+
+    it('dispatchの実行中にoffして同じハンドラーを登録し直しても同回のdispatchでは呼ばれない', () => {
+      const handler2 = vi.fn();
+      const handler1 = vi.fn(() => {
+        dispatcher.off('click', { handler: handler2 });
+        dispatcher.on('click', handler2);
+      });
+      dispatcher.on('click', handler1, { once: true });
+      dispatcher.on('click', handler2);
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler2).not.toHaveBeenCalled();
       dispatcher.dispatch('click', { x: 10, y: 20 });
       expect(handler2).toHaveBeenCalledOnce();
     });
@@ -512,6 +595,38 @@ describe('EventDispatcher', () => {
       expect(() => dispatcher.resume()).toThrow(error);
       expect(changeHandler).toHaveBeenCalledOnce();
     });
+
+    it('溜めていたイベントの発火中にdispatchしたイベントは、残りの溜めていたイベントより先に発火される', () => {
+      const log: string[] = [];
+      dispatcher.on('click', () => {
+        log.push('click');
+        dispatcher.dispatch('focus', { target: 'nested' });
+      });
+      dispatcher.on(['change', 'focus'], (event) => log.push(event.type));
+      dispatcher.suspend('queue');
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      dispatcher.dispatch('change', { value: 'test' });
+      dispatcher.resume();
+      expect(log).toEqual(['click', 'focus', 'change']);
+    });
+
+    it('溜めていたイベントの発火中にsuspendしても、残りの溜めていたイベントは発火される', () => {
+      const changeHandler = vi.fn();
+      const focusHandler = vi.fn();
+      dispatcher.on('click', () => {
+        dispatcher.suspend();
+        dispatcher.dispatch('focus', { target: 'ignored' });
+      });
+      dispatcher.on('change', changeHandler);
+      dispatcher.on('focus', focusHandler);
+      dispatcher.suspend('queue');
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      dispatcher.dispatch('change', { value: 'test' });
+      dispatcher.resume();
+      expect(changeHandler).toHaveBeenCalledOnce();
+      // ハンドラーでの suspend は有効で、その後の dispatch は抑止される
+      expect(focusHandler).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------
@@ -553,6 +668,37 @@ describe('EventDispatcher', () => {
         }),
       ).toThrow('test');
       dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('関数の例外は抑止の解除時のハンドラーの例外で失われず、AggregateErrorにまとめられる', () => {
+      const fnError = new Error('fn');
+      const handlerError = new Error('handler');
+      dispatcher.on('click', () => {
+        throw handlerError;
+      });
+      try {
+        dispatcher.suspendDuring(() => {
+          dispatcher.dispatch('click', { x: 10, y: 20 });
+          throw fnError;
+        }, 'queue');
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(AggregateError);
+        expect((e as AggregateError).errors).toEqual([fnError, handlerError]);
+      }
+    });
+
+    it('関数で例外が発生し、ハンドラーで例外が発生しなければ関数の例外がそのまま投げられる', () => {
+      const fnError = new Error('fn');
+      const handler = vi.fn();
+      dispatcher.on('click', handler);
+      expect(() =>
+        dispatcher.suspendDuring(() => {
+          dispatcher.dispatch('click', { x: 10, y: 20 });
+          throw fnError;
+        }, 'queue'),
+      ).toThrow(fnError);
       expect(handler).toHaveBeenCalledOnce();
     });
 
@@ -600,6 +746,25 @@ describe('EventDispatcher', () => {
       expect(handler).toHaveBeenCalledOnce();
     });
 
+    it('dispose後も再び登録・発火できる', () => {
+      dispatcher.on('click', vi.fn());
+      dispatcher.dispose();
+      const handler = vi.fn();
+      dispatcher.on('click', handler);
+      dispatcher.dispatch('click', { x: 10, y: 20 });
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('signal付きのハンドラーはdisposeでsignalのリスナーも解除される', () => {
+      const controller = new AbortController();
+      const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+      dispatcher.on(['click', 'change'], vi.fn(), {
+        signal: controller.signal,
+      });
+      dispatcher.dispose();
+      expect(removeSpy).toHaveBeenCalledOnce();
+    });
+
     it('using構文でスコープを抜けるとdisposeされる', () => {
       const handler = vi.fn();
       let events: EventDispatcher<TestEvents>;
@@ -610,6 +775,279 @@ describe('EventDispatcher', () => {
       }
       events.dispatch('click', { x: 10, y: 20 });
       expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------
+  // activate
+  // -------------------------
+  describe('activate', () => {
+    // click の有効化と無効化の呼び出しを記録する dispatcher を作る
+    const create = () => {
+      const log: string[] = [];
+      const events = new EventDispatcher<TestEvents>({
+        activate: {
+          click: ({ type }) => {
+            log.push(`activate:${type}`);
+            return () => log.push(`deactivate:${type}`);
+          },
+          change: ({ type }) => {
+            log.push(`activate:${type}`);
+            return () => log.push(`deactivate:${type}`);
+          },
+        },
+      });
+      return { events, log };
+    };
+
+    it('最初のハンドラーが登録されたときだけ有効化される', () => {
+      const { events, log } = create();
+      events.on('click', vi.fn());
+      events.on('click', vi.fn());
+      expect(log).toEqual(['activate:click']);
+    });
+
+    it('最後のハンドラーが削除されたときに無効化される', () => {
+      const { events, log } = create();
+      const off1 = events.on('click', vi.fn());
+      const off2 = events.on('click', vi.fn());
+      off1();
+      expect(log).toEqual(['activate:click']);
+      off2();
+      expect(log).toEqual(['activate:click', 'deactivate:click']);
+    });
+
+    it('有効化の処理がないイベントでは何も起きない', () => {
+      const { events, log } = create();
+      events.on('focus', vi.fn())();
+      expect(log).toEqual([]);
+    });
+
+    it('複数のイベント名で登録するとイベント名ごとに有効化・無効化される', () => {
+      const { events, log } = create();
+      events.on(['click', 'change'], vi.fn())();
+      expect(log).toEqual([
+        'activate:click',
+        'activate:change',
+        'deactivate:click',
+        'deactivate:change',
+      ]);
+    });
+
+    it.each([
+      [
+        'off(type)',
+        (events: EventDispatcher<TestEvents>) => events.off('click'),
+      ],
+      [
+        'off({ handler })',
+        (events: EventDispatcher<TestEvents>, handler: () => void) =>
+          events.off({ handler }),
+      ],
+      [
+        'off({ owner })',
+        (events: EventDispatcher<TestEvents>, _: () => void, owner: object) =>
+          events.off({ owner }),
+      ],
+      ['dispose', (events: EventDispatcher<TestEvents>) => events.dispose()],
+    ])('%sで削除しても無効化される', (_, remove) => {
+      const { events, log } = create();
+      const handler = vi.fn();
+      const owner = {};
+      events.on('click', handler, { owner });
+      remove(events, handler, owner);
+      expect(log).toEqual(['activate:click', 'deactivate:click']);
+    });
+
+    it('signalのabortで削除しても無効化される', () => {
+      const { events, log } = create();
+      const controller = new AbortController();
+      events.on('click', vi.fn(), { signal: controller.signal });
+      controller.abort();
+      expect(log).toEqual(['activate:click', 'deactivate:click']);
+    });
+
+    it('onceのハンドラーが呼ばれると無効化される', () => {
+      const { events, log } = create();
+      events.on('click', () => log.push('handler'), { once: true });
+      events.dispatch('click', { x: 10, y: 20 });
+      expect(log).toEqual(['activate:click', 'deactivate:click', 'handler']);
+    });
+
+    it('無効化のあとに登録し直すと再び有効化される', () => {
+      const { events, log } = create();
+      events.on('click', vi.fn())();
+      events.on('click', vi.fn());
+      expect(log).toEqual([
+        'activate:click',
+        'deactivate:click',
+        'activate:click',
+      ]);
+    });
+
+    it('dispose後に登録すると再び有効化される', () => {
+      const { events, log } = create();
+      events.on('click', vi.fn());
+      events.dispose();
+      events.on('click', vi.fn());
+      expect(log).toEqual([
+        'activate:click',
+        'deactivate:click',
+        'activate:click',
+      ]);
+    });
+
+    it('有効化の処理が関数を返さなくてもよい', () => {
+      const activate = vi.fn();
+      const events = new EventDispatcher<TestEvents>({
+        activate: { click: activate },
+      });
+      events.on('click', vi.fn())();
+      expect(activate).toHaveBeenCalledOnce();
+    });
+
+    it('有効化の処理の中で発火したイベントを登録したハンドラーが受け取れる', () => {
+      const events = new EventDispatcher<TestEvents>({
+        activate: {
+          change: ({ dispatch }) => {
+            dispatch('change', { value: 'initial' });
+          },
+        },
+      });
+      const handler = vi.fn();
+      events.on('change', handler);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({ detail: { value: 'initial' } }),
+      );
+    });
+
+    it('有効化の処理の中でonceのハンドラーが削除された場合は、すぐに無効化される', () => {
+      const deactivate = vi.fn();
+      const events = new EventDispatcher<TestEvents>({
+        activate: {
+          change: ({ dispatch }) => {
+            dispatch('change', { value: 'initial' });
+            return deactivate;
+          },
+        },
+      });
+      events.on('change', vi.fn(), { once: true });
+      expect(events.hasHandlers('change')).toBe(false);
+      expect(deactivate).toHaveBeenCalledOnce();
+    });
+
+    it('有効化の処理の中で再び有効化された場合は、外側の有効化がすぐに無効化される', () => {
+      const deactivates: string[] = [];
+      let count = 0;
+      const events = new EventDispatcher<TestEvents>({
+        activate: {
+          change: ({ dispatch }) => {
+            const id = `#${++count}`;
+            if (count === 1) {
+              dispatch('change', { value: 'initial' });
+            }
+            return () => deactivates.push(id);
+          },
+        },
+      });
+      // once のハンドラーが初期値を受け取って削除され、ハンドラーの中で登録し直す
+      events.on('change', () => events.on('change', vi.fn()), { once: true });
+      expect(events.hasHandlers('change')).toBe(true);
+      expect(deactivates).toEqual(['#1']);
+      events.off('change');
+      expect(deactivates).toEqual(['#1', '#2']);
+    });
+
+    describe('例外', () => {
+      it('有効化の処理で例外が発生するとonから投げられ、登録は取り消される', () => {
+        const error = new Error('activate');
+        const log: string[] = [];
+        const events = new EventDispatcher<TestEvents>({
+          activate: {
+            click: () => {
+              log.push('activate:click');
+              return () => log.push('deactivate:click');
+            },
+            change: () => {
+              throw error;
+            },
+          },
+        });
+        const handler = vi.fn();
+        expect(() => events.on(['click', 'change'], handler)).toThrow(error);
+        expect(events.hasHandlers('click')).toBe(false);
+        expect(events.hasHandlers('change')).toBe(false);
+        // 先に有効化された click は無効化される
+        expect(log).toEqual(['activate:click', 'deactivate:click']);
+      });
+
+      it('無効化の処理で例外が発生するとoffから投げられ、ハンドラーは削除される', () => {
+        const error = new Error('deactivate');
+        const events = new EventDispatcher<TestEvents>({
+          activate: {
+            click: () => () => {
+              throw error;
+            },
+          },
+        });
+        const off = events.on('click', vi.fn());
+        expect(() => off()).toThrow(error);
+        expect(events.hasHandlers('click')).toBe(false);
+      });
+
+      it('disposeで無効化の処理の例外が発生しても、すべて削除してから投げられる', () => {
+        const error = new Error('deactivate');
+        const deactivate = vi.fn();
+        const events = new EventDispatcher<TestEvents>({
+          activate: {
+            click: () => () => {
+              throw error;
+            },
+            change: () => deactivate,
+          },
+        });
+        events.on(['click', 'change'], vi.fn());
+        events.suspend();
+        expect(() => events.dispose()).toThrow(error);
+        expect(events.hasHandlers('click')).toBe(false);
+        expect(events.hasHandlers('change')).toBe(false);
+        expect(deactivate).toHaveBeenCalledOnce();
+        // 抑止も解除されている
+        const handler = vi.fn();
+        events.on('focus', handler);
+        events.dispatch('focus', { target: 'input' });
+        expect(handler).toHaveBeenCalledOnce();
+      });
+
+      it('dispatch中の無効化の処理の例外は、ハンドラーの例外と同じく最後に投げられる', () => {
+        const error = new Error('deactivate');
+        const events = new EventDispatcher<TestEvents>({
+          activate: {
+            click: () => () => {
+              throw error;
+            },
+          },
+        });
+        const handler = vi.fn();
+        events.on('click', handler, { once: true });
+        expect(() => events.dispatch('click', { x: 10, y: 20 })).toThrow(error);
+        expect(handler).toHaveBeenCalledOnce();
+      });
+    });
+
+    it('有効化の処理の型', () => {
+      new EventDispatcher<TestEvents>({
+        activate: {
+          click: ({ type, dispatch }) => {
+            expectTypeOf(type).toEqualTypeOf<'click'>();
+            dispatch('reset');
+            // @ts-expect-error detail の型が違う
+            dispatch('change', { x: 1 });
+          },
+          // @ts-expect-error 存在しないイベント名
+          unknown: () => {},
+        },
+      });
     });
   });
 
@@ -658,19 +1096,40 @@ describe('EventDispatcher', () => {
     };
 
     class Child implements Evented<ChildEvents> {
-      readonly events: EventDispatcherLike<ChildEvents>;
-      constructor(events: EventDispatcherLike<ChildEvents>) {
-        this.events = events;
+      readonly events: EventSubscribable<ChildEvents>;
+      private readonly dispatcher: EventDispatcherLike<ChildEvents>;
+      constructor(dispatcher: EventDispatcherLike<ChildEvents>) {
+        this.dispatcher = dispatcher;
+        this.events = dispatcher;
       }
       doClick() {
-        this.events.dispatch('click', { x: 10, y: 20 });
+        this.dispatcher.dispatch('click', { x: 10, y: 20 });
       }
     }
 
     class Parent implements Evented<ParentEvents> {
-      readonly events = new EventDispatcher<ParentEvents>();
-      readonly child = new Child(this.events);
+      private readonly dispatcher = new EventDispatcher<ParentEvents>();
+      readonly events: EventSubscribable<ParentEvents> = this.dispatcher;
+      readonly child = new Child(this.dispatcher);
     }
+
+    it('Eventedのeventsからはdispatchできない', () => {
+      const parent = new Parent();
+      // @ts-expect-error 購読用のインターフェイスには dispatch がない
+      parent.events.dispatch('click', { x: 10, y: 20 });
+    });
+
+    it('子に渡すインターフェイスからはdisposeできない', () => {
+      expectTypeOf<EventDispatcherLike<ChildEvents>>().not.toHaveProperty(
+        'dispose',
+      );
+    });
+
+    it('子の購読用インターフェイスに親のdispatcherを代入できる', () => {
+      expectTypeOf<EventSubscribable<ParentEvents>>().toExtend<
+        EventSubscribable<ChildEvents>
+      >();
+    });
 
     it('親のdispatcherを子に渡すと親経由でハンドラーが受け取れる', () => {
       const parent = new Parent();

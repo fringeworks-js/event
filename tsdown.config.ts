@@ -40,20 +40,6 @@ export default defineConfig({
             require: { types: './index.d.cts', default: './index.cjs' },
           },
           './package.json': './package.json',
-          './constants': {
-            import: { types: './constants.d.mts', default: './constants.mjs' },
-            require: { types: './constants.d.cts', default: './constants.cjs' },
-          },
-          './*/constants': {
-            import: {
-              types: './*/constants.d.mts',
-              default: './*/constants.mjs',
-            },
-            require: {
-              types: './*/constants.d.cts',
-              default: './*/constants.cjs',
-            },
-          },
           './types': {
             import: { types: './types.d.mts', default: './types.mjs' },
             require: { types: './types.d.cts', default: './types.cjs' },

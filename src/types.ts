@@ -85,7 +85,8 @@ export type OnHandlerOptions = {
 /**
  * ハンドラー削除時のオプション\
  * ハンドラーを指定して削除する場合はhandlerを、\
- * オーナーを指定して削除する場合はownerを指定する（両方の指定は不可）
+ * オーナーを指定して削除する場合はownerを指定する（両方の指定は不可）\
+ * 指定した値が null / undefined の場合は何も削除しない
  */
 export type OffHandlerOptions =
   | {
@@ -105,6 +106,48 @@ export type OffHandlerOptions =
     };
 
 /**
+ * 有効化の処理に渡される情報
+ */
+export type EventActivatorContext<
+  M extends EventMap = EventMap,
+  K extends keyof M = keyof M,
+> = {
+  /**
+   * 有効になったイベント名
+   */
+  readonly type: K;
+
+  /**
+   * イベントを発火する（EventDispatcher の dispatch と同じ）
+   */
+  readonly dispatch: <P extends keyof M>(
+    type: P,
+    ...args: DetailArgs<M[P]>
+  ) => boolean;
+};
+
+/**
+ * イベントの有効化の処理\
+ * イベントの最初のハンドラーが登録されたときに呼ばれる\
+ * 関数を返すと、最後のハンドラーが削除されたときに呼ばれる
+ */
+export type EventActivator<
+  M extends EventMap = EventMap,
+  K extends keyof M = keyof M,
+> = (context: EventActivatorContext<M, K>) => (() => void) | void;
+
+/**
+ * EventDispatcher のオプション
+ */
+export type EventDispatcherOptions<M extends EventMap = EventMap> = {
+  /**
+   * イベント名ごとの有効化の処理\
+   * ハンドラーが登録されているあいだだけ、イベントの元になる処理（DOM のリスナーなど）を動かす場合に使う
+   */
+  activate?: { readonly [K in keyof M]?: EventActivator<M, K> };
+};
+
+/**
  * 抑止中に発火されたイベントの扱い
  *
  * - `ignore` - 無視する（捨てる）
@@ -114,12 +157,21 @@ export type OffHandlerOptions =
 export type SuspendMode = 'ignore' | 'queue' | 'latest';
 
 /**
- * EventDispatcherのインターフェイス
+ * 同期的に実行される関数\
+ * Promise を返す関数は型エラーになる
  */
-export interface EventDispatcherLike<M extends EventMap = EventMap> {
+export type SyncFunction<R> = () => R &
+  ([R] extends [PromiseLike<unknown>] ? never : unknown);
+
+/**
+ * イベントを購読する側のインターフェイス\
+ * 外部に公開して、ハンドラーの登録と削除だけを許可する場合に使う
+ */
+export interface EventSubscribable<M extends EventMap = EventMap> {
   /**
    * イベントハンドラーを登録する\
-   * 同一イベントへの同一ハンドラーの重複登録は無視される
+   * 同一イベントへの同一ハンドラーの重複登録は無視される\
+   * 実行中の dispatch で登録したハンドラーは、その dispatch では呼ばれない
    * @param type - イベント名。配列で複数指定できる
    * @returns ハンドラーを削除する関数
    */
@@ -130,7 +182,8 @@ export interface EventDispatcherLike<M extends EventMap = EventMap> {
   ): () => void;
 
   /**
-   * イベントハンドラーを削除する
+   * イベントハンドラーを削除する\
+   * 実行中の dispatch で削除したハンドラーは、その dispatch でも以降は呼ばれない
    * @param type - イベント名。配列で複数指定できる。省略した場合は全イベントが対象になる
    * @param options - handler を指定するとそのハンドラーのみ、owner を指定するとそのオーナーのハンドラーを削除。省略した場合はすべて削除
    */
@@ -139,12 +192,26 @@ export interface EventDispatcherLike<M extends EventMap = EventMap> {
     options?: OffHandlerOptions,
   ): void;
   off(options: OffHandlerOptions): void;
+}
 
+/**
+ * イベントを発火する側のインターフェイス\
+ * インスタンスを共有する子に渡す場合に使う。破棄はインスタンスを作った側だけが行うため、dispose は含まない
+ */
+export interface EventDispatcherLike<
+  M extends EventMap = EventMap,
+> extends EventSubscribable<M> {
   /**
    * イベントを発火する
    * @returns いずれかのハンドラーで preventDefault が呼ばれた場合は false（抑止中は常に true）
    */
   dispatch<K extends keyof M>(type: K, ...args: DetailArgs<M[K]>): boolean;
+
+  /**
+   * イベントにハンドラーが登録されているかどうかを返す\
+   * detail の生成に手間がかかる場合に、発火を省くために使う
+   */
+  hasHandlers(type: keyof M): boolean;
 
   /**
    * イベントの発火を抑止する\
@@ -155,30 +222,24 @@ export interface EventDispatcherLike<M extends EventMap = EventMap> {
 
   /**
    * イベントの発火抑止を解除する\
-   * 抑止が完全に解除された時点で、溜めていたイベントを発火する
+   * 抑止が完全に解除された時点で、溜めていたイベントを溜めた順に発火する\
+   * 発火中のハンドラーで dispatch したイベントは、残りの溜めていたイベントより先に発火される\
+   * 発火中のハンドラーで suspend を呼んでも、溜めていたイベントはすべて発火される
    */
   resume(): void;
 
   /**
    * 関数の実行中だけイベントの発火を抑止する\
    * 関数は同期的に実行され、例外が発生しても抑止は解除される\
-   * Promise を返す関数は型エラーになる（非同期の処理では suspend と resume を使う）
+   * 関数の例外に加えて抑止の解除時にハンドラーでも例外が発生した場合は、関数の例外を先頭にして AggregateError にまとめる
    * @returns 関数の戻り値
    */
-  suspendDuring<R>(
-    fn: () => R & ([R] extends [PromiseLike<unknown>] ? never : unknown),
-    mode?: SuspendMode,
-  ): R;
-
-  /**
-   * 全ハンドラーと溜めていたイベントを削除し、抑止を解除する
-   */
-  dispose(): void;
+  suspendDuring<R>(fn: SyncFunction<R>, mode?: SuspendMode): R;
 }
 
 /**
- * EventDispatcherLikeを持つクラスのインターフェイス
+ * イベントを購読できるクラスのインターフェイス
  */
 export interface Evented<M extends EventMap = EventMap> {
-  readonly events: EventDispatcherLike<M>;
+  readonly events: EventSubscribable<M>;
 }

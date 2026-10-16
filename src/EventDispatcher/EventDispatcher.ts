@@ -1,17 +1,21 @@
+import { throwErrors, toError } from '../_internal/errors';
 import type {
   DetailArgs,
   EventDispatcherLike,
+  EventDispatcherOptions,
   EventHandler,
   EventInfo,
   EventMap,
   OffHandlerOptions,
   OnHandlerOptions,
   SuspendMode,
+  SyncFunction,
 } from '../types';
-import type { HandlerEntry, QueuedEvent } from './types';
+import type { HandlerEntry, QueuedEvent } from './_types';
 
 /**
- * イベントディスパッチャー
+ * イベントディスパッチャー\
+ * 各メソッドの説明は EventDispatcherLike を参照
  */
 export default class EventDispatcher<M extends EventMap = EventMap>
   implements EventDispatcherLike<M>, Disposable
@@ -38,11 +42,22 @@ export default class EventDispatcher<M extends EventMap = EventMap>
   private _queue: QueuedEvent[] = [];
 
   /**
-   * イベントハンドラーを登録する\
-   * 同一イベントへの同一ハンドラーの重複登録は無視される
-   * @param type - イベント名。配列で複数指定できる
-   * @returns ハンドラーを削除する関数
+   * イベント名ごとの有効化の処理
    */
+  private readonly _activators: EventDispatcherOptions<M>['activate'];
+
+  /**
+   * 有効になっているイベントの無効化の処理
+   */
+  private _deactivators = new Map<PropertyKey, () => void>();
+
+  /**
+   * @param options - 有効化の処理などのオプション
+   */
+  constructor(options?: EventDispatcherOptions<M>) {
+    this._activators = options?.activate;
+  }
+
   on<K extends keyof M>(
     type: K | readonly K[],
     handler: EventHandler<M, K>,
@@ -58,14 +73,13 @@ export default class EventDispatcher<M extends EventMap = EventMap>
       handler,
       owner,
       once,
-      fired: false,
       types: new Set(),
       cleanup: () => signal?.removeEventListener('abort', onAbort),
     };
     const off = () => {
-      for (const t of [...entry.types]) {
-        this._removeEntries(t, (e) => e === entry);
-      }
+      const errors: unknown[] = [];
+      this._removeEntry(entry, errors);
+      throwErrors(errors);
     };
 
     for (const t of toTypes(type)) {
@@ -74,8 +88,20 @@ export default class EventDispatcher<M extends EventMap = EventMap>
       if (handlers.some((e) => e.handler === handler)) {
         continue;
       }
+      // 有効化の処理の中で発火したイベントを受け取れるよう、登録してから有効化する
       this._handlers.set(t, [...handlers, entry]);
       entry.types.add(t);
+      if (handlers.length > 0) {
+        continue;
+      }
+      try {
+        this._activate(t);
+      } catch (error) {
+        // 有効化に失敗した場合は、イベントの来ないハンドラーが残らないよう登録を取り消す
+        const errors: unknown[] = [error];
+        this._removeEntry(entry, errors);
+        throw toError(errors);
+      }
     }
 
     if (entry.types.size > 0) {
@@ -84,11 +110,6 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     return off;
   }
 
-  /**
-   * イベントハンドラーを削除する
-   * @param type - イベント名。配列で複数指定できる。省略した場合は全イベントが対象になる
-   * @param options - handler を指定するとそのハンドラーのみ、owner を指定するとそのオーナーのハンドラーを削除。省略した場合はすべて削除
-   */
   off<K extends keyof M>(
     type: K | readonly K[],
     options?: OffHandlerOptions,
@@ -98,24 +119,26 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     typeOrOptions: K | readonly K[] | OffHandlerOptions,
     options?: OffHandlerOptions,
   ): void {
+    let types: readonly PropertyKey[];
+    let match: ((entry: HandlerEntry) => boolean) | undefined;
     if (isOffHandlerOptions(typeOrOptions)) {
       // type 指定なし: 全イベントが対象
-      const match = toMatcher(typeOrOptions);
-      for (const t of [...this._handlers.keys()]) {
-        this._removeEntries(t, match);
-      }
+      types = [...this._handlers.keys()];
+      match = toMatcher(typeOrOptions);
+    } else {
+      types = toTypes(typeOrOptions);
+      match = options ? toMatcher(options) : () => true;
+    }
+    if (!match) {
       return;
     }
-    const match = options ? toMatcher(options) : () => true;
-    for (const t of toTypes(typeOrOptions)) {
-      this._removeEntries(t, match);
+    const errors: unknown[] = [];
+    for (const t of types) {
+      this._removeEntries(t, match, errors);
     }
+    throwErrors(errors);
   }
 
-  /**
-   * イベントを発火する
-   * @returns いずれかのハンドラーで preventDefault が呼ばれた場合は false（抑止中は常に true）
-   */
   dispatch<K extends keyof M>(type: K, ...args: DetailArgs<M[K]>): boolean {
     const [detail] = args;
     if (this._suspendCount > 0) {
@@ -128,11 +151,10 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     return result;
   }
 
-  /**
-   * イベントの発火を抑止する\
-   * 入れ子で呼んだ場合は同じ回数 resume するまで抑止が続き、mode は一番外側の指定に従う
-   * @param mode - 抑止中に発火されたイベントの扱い（デフォルトは ignore）
-   */
+  hasHandlers(type: keyof M): boolean {
+    return this._handlers.has(type);
+  }
+
   suspend(mode: SuspendMode = 'ignore'): void {
     if (this._suspendCount === 0) {
       this._suspendMode = mode;
@@ -140,54 +162,40 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     this._suspendCount++;
   }
 
-  /**
-   * イベントの発火抑止を解除する\
-   * 抑止が完全に解除された時点で、溜めていたイベントを発火する
-   */
   resume(): void {
-    if (this._suspendCount === 0) {
-      return;
-    }
-    this._suspendCount--;
-    if (this._suspendCount > 0) {
-      return;
-    }
-    const queue = this._queue;
-    this._queue = [];
     const errors: unknown[] = [];
-    for (const { type, detail } of queue) {
-      this._invoke(type, detail, errors);
-    }
+    this._resume(errors);
     throwErrors(errors);
   }
 
-  /**
-   * 関数の実行中だけイベントの発火を抑止する\
-   * 関数は同期的に実行され、例外が発生しても抑止は解除される\
-   * Promise を返す関数は型エラーになる（非同期の処理では suspend と resume を使う）
-   * @returns 関数の戻り値
-   */
-  suspendDuring<R>(
-    fn: () => R & ([R] extends [PromiseLike<unknown>] ? never : unknown),
-    mode?: SuspendMode,
-  ): R {
+  suspendDuring<R>(fn: SyncFunction<R>, mode?: SuspendMode): R {
     this.suspend(mode);
+    let result: R;
     try {
-      return fn();
-    } finally {
-      this.resume();
+      result = fn();
+    } catch (error) {
+      // 抑止の解除時のハンドラーの例外で、関数の例外が失われないようにする
+      const errors: unknown[] = [error];
+      this._resume(errors);
+      throw toError(errors, 'The function and event handlers threw errors');
     }
+    this.resume();
+    return result;
   }
 
   /**
-   * 全ハンドラーと溜めていたイベントを削除し、抑止を解除する
+   * 全ハンドラーと溜めていたイベントを削除し、抑止を解除する\
+   * 実行中の dispatch でも、残りのハンドラーは呼ばれなくなる\
+   * 有効になっているイベントの無効化の処理もすべて呼ぶ
    */
   dispose(): void {
+    const errors: unknown[] = [];
     for (const t of [...this._handlers.keys()]) {
-      this._removeEntries(t, () => true);
+      this._removeEntries(t, () => true, errors);
     }
     this._queue = [];
     this._suspendCount = 0;
+    throwErrors(errors);
   }
 
   [Symbol.dispose](): void {
@@ -195,11 +203,13 @@ export default class EventDispatcher<M extends EventMap = EventMap>
   }
 
   /**
-   * 指定のイベントから条件に一致するハンドラーを削除する
+   * 指定のイベントから条件に一致するハンドラーを削除する\
+   * ハンドラーがなくなった場合は無効化の処理を呼び、その例外は errors に溜める
    */
   private _removeEntries(
     type: PropertyKey,
     match: (entry: HandlerEntry) => boolean,
+    errors: unknown[],
   ): void {
     const handlers = this._handlers.get(type);
     if (!handlers) {
@@ -218,8 +228,59 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     }
     if (rest.length > 0) {
       this._handlers.set(type, rest);
-    } else {
-      this._handlers.delete(type);
+      return;
+    }
+    this._handlers.delete(type);
+    this._deactivate(type, errors);
+  }
+
+  /**
+   * ハンドラーを登録されているすべてのイベントから削除する
+   */
+  private _removeEntry(entry: HandlerEntry, errors: unknown[]): void {
+    for (const t of [...entry.types]) {
+      this._removeEntries(t, (e) => e === entry, errors);
+    }
+  }
+
+  /**
+   * イベントの有効化の処理を呼び、無効化の処理を記録する
+   */
+  private _activate(type: PropertyKey): void {
+    const activator = this._activators?.[type as keyof M];
+    if (!activator) {
+      return;
+    }
+    const deactivate = activator({
+      type: type as keyof M,
+      dispatch: this.dispatch.bind(this),
+    });
+    if (typeof deactivate !== 'function') {
+      return;
+    }
+    // 有効化の処理の中で無効になった、または再び有効になった（記録済み）場合は、
+    // この有効化は終わっているため、すぐに無効化する
+    if (!this._handlers.has(type) || this._deactivators.has(type)) {
+      deactivate();
+      return;
+    }
+    this._deactivators.set(type, deactivate);
+  }
+
+  /**
+   * イベントの無効化の処理を呼ぶ\
+   * 例外は errors に溜める
+   */
+  private _deactivate(type: PropertyKey, errors: unknown[]): void {
+    const deactivate = this._deactivators.get(type);
+    if (!deactivate) {
+      return;
+    }
+    this._deactivators.delete(type);
+    try {
+      deactivate();
+    } catch (error) {
+      errors.push(error);
     }
   }
 
@@ -239,8 +300,28 @@ export default class EventDispatcher<M extends EventMap = EventMap>
   }
 
   /**
+   * 抑止を1段階解除し、完全に解除された場合は溜めていたイベントを発火する\
+   * ハンドラーで発生した例外は errors に溜める
+   */
+  private _resume(errors: unknown[]): void {
+    if (this._suspendCount === 0) {
+      return;
+    }
+    this._suspendCount--;
+    if (this._suspendCount > 0) {
+      return;
+    }
+    // 発火中のハンドラーで suspend されても、取り出したイベントはすべて発火する
+    const queue = this._queue;
+    this._queue = [];
+    for (const { type, detail } of queue) {
+      this._invoke(type, detail, errors);
+    }
+  }
+
+  /**
    * ハンドラーを実行する\
-   * ハンドラーで発生した例外は errors に溜め、残りのハンドラーの実行を続ける
+   * ハンドラー（と once による無効化の処理）で発生した例外は errors に溜め、残りのハンドラーの実行を続ける
    * @returns preventDefault が呼ばれなかった場合は true
    */
   private _invoke(
@@ -248,6 +329,11 @@ export default class EventDispatcher<M extends EventMap = EventMap>
     detail: unknown,
     errors: unknown[],
   ): boolean {
+    const handlers = this._handlers.get(type);
+    if (!handlers) {
+      return true;
+    }
+
     let defaultPrevented = false;
     let stopped = false;
     const event = {
@@ -264,19 +350,17 @@ export default class EventDispatcher<M extends EventMap = EventMap>
       },
     } as unknown as EventInfo<M>;
 
-    for (const entry of this._handlers.get(type) ?? []) {
+    for (const entry of handlers) {
       if (stopped) {
         break;
       }
+      // dispatch 中に削除されたハンドラーは呼ばない
+      // once のハンドラーは呼ぶ前に削除されるため、再帰的な dispatch でも二重に呼ばれない
+      if (!entry.types.has(type)) {
+        continue;
+      }
       if (entry.once) {
-        // 同じ dispatch 中や再帰的な dispatch で二重に呼ばれないようにする
-        if (entry.fired) {
-          continue;
-        }
-        entry.fired = true;
-        for (const t of [...entry.types]) {
-          this._removeEntries(t, (e) => e === entry);
-        }
+        this._removeEntry(entry, errors);
       }
       try {
         entry.handler(event);
@@ -300,26 +384,18 @@ function isOffHandlerOptions(value: unknown): value is OffHandlerOptions {
 }
 
 /**
- * 削除オプションから削除対象の判定関数を作る
+ * 削除オプションから削除対象の判定関数を作る\
+ * handler も owner も null / undefined の場合は、意図しない削除を防ぐため undefined を返す
  */
 function toMatcher(
   options: OffHandlerOptions,
-): (entry: HandlerEntry) => boolean {
+): ((entry: HandlerEntry) => boolean) | undefined {
   const { handler, owner } = options;
-  return handler != null
-    ? (entry) => entry.handler === handler
-    : (entry) => entry.owner === owner;
-}
-
-/**
- * 溜めていた例外を投げる\
- * 1件ならそのまま、複数なら AggregateError にまとめて投げる
- */
-function throwErrors(errors: unknown[]): void {
-  if (errors.length === 1) {
-    throw errors[0];
+  if (handler != null) {
+    return (entry) => entry.handler === handler;
   }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, 'Multiple event handlers threw errors');
+  if (owner != null) {
+    return (entry) => entry.owner === owner;
   }
+  return undefined;
 }

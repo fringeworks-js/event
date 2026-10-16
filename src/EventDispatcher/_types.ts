@@ -19,12 +19,8 @@ export type HandlerEntry = {
   once: boolean;
 
   /**
-   * once のハンドラーが呼ばれたかどうか
-   */
-  fired: boolean;
-
-  /**
-   * このエントリーが登録されているイベント名
+   * このエントリーが登録されているイベント名\
+   * dispatch 中に削除されたかどうかの判定にも使う
    */
   types: Set<PropertyKey>;
 
