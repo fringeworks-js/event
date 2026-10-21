@@ -2,6 +2,8 @@
  * イベントマップの基本型\
  * キーがイベント名、値が detail の型（detail のないイベントは void）
  */
+// interface で定義したイベントマップも受け付けるため、unknown ではなく any にする
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type EventMap = Record<string, any>;
 
 /**
@@ -68,7 +70,7 @@ export type OnHandlerOptions = {
    * イベントハンドラーのオーナー\
    * off({ owner }) でオーナー単位にまとめて削除できる
    */
-  owner?: any;
+  owner?: unknown;
 
   /**
    * true の場合、一度呼ばれたら自動で削除される\
@@ -93,6 +95,8 @@ export type OffHandlerOptions =
       /**
        * 削除対象のハンドラー
        */
+      // どのイベントのハンドラーも受け付けるため、any にする
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       handler: EventHandler<any, any>;
 
       owner?: never;
@@ -101,7 +105,7 @@ export type OffHandlerOptions =
       /**
        * 削除対象のハンドラーのオーナー
        */
-      owner: any;
+      owner: unknown;
       handler?: never;
     };
 

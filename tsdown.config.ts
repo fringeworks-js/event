@@ -1,69 +1,16 @@
-import createExternal from '@fringeworks/dev/createExternal';
-import distPackage from '@fringeworks/rollup-plugin-dist-package';
-import copy from 'rollup-plugin-copy';
+import createTsdownConfig from '@fringeworks/dev/createTsdownConfig';
 import { defineConfig } from 'tsdown';
 
+const config = createTsdownConfig();
+
 export default defineConfig({
-  entry: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.test.{ts,tsx}',
-    '!src/**/*.d.{ts,tsx}',
-  ],
-  format: ['esm', 'cjs'],
-  dts: true,
-  unbundle: true,
-  sourcemap: false,
-  clean: true,
-  outDir: 'dist',
-  minify: false,
-  inputOptions: {
-    external: createExternal(),
-  },
+  ...config,
   outputOptions: {
-    preserveModules: true,
-    preserveModulesRoot: 'src',
+    ...config.outputOptions,
     // [Symbol.dispose] の型を利用者側で解決できるようにする（rolldown-plugin-dts は lib の参照を出力から削除するため banner で追加する）
     banner: (chunk) =>
       /^EventDispatcher\/EventDispatcher\.d\.[cm]ts$/.test(chunk.fileName)
         ? '/// <reference lib="esnext.disposable" />'
         : '',
   },
-  plugins: [
-    distPackage({
-      content: {
-        main: './index.cjs',
-        module: './index.mjs',
-        types: './index.d.cts',
-        exports: {
-          '.': {
-            import: { types: './index.d.mts', default: './index.mjs' },
-            require: { types: './index.d.cts', default: './index.cjs' },
-          },
-          './package.json': './package.json',
-          './types': {
-            import: { types: './types.d.mts', default: './types.mjs' },
-            require: { types: './types.d.cts', default: './types.cjs' },
-          },
-          './*/types': {
-            import: { types: './*/types.d.mts', default: './*/types.mjs' },
-            require: { types: './*/types.d.cts', default: './*/types.cjs' },
-          },
-          './*': {
-            import: { types: './*/index.d.mts', default: './*/index.mjs' },
-            require: { types: './*/index.d.cts', default: './*/index.cjs' },
-          },
-        },
-      },
-      resolveWorkspaceDeps: true,
-      range: '^',
-    }),
-    copy({
-      targets: [
-        {
-          src: ['LICENSE', 'README.md', 'README.ja.md'],
-          dest: 'dist',
-        },
-      ],
-    }),
-  ],
 });

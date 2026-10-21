@@ -6,12 +6,14 @@ export type HandlerEntry = {
   /**
    * ハンドラー
    */
+  // 異なるイベントのハンドラーをまとめて持つため、引数は any にする
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (event: any) => void;
 
   /**
    * オーナー
    */
-  owner: any;
+  owner: unknown;
 
   /**
    * 一度だけ呼ばれるかどうか
