@@ -1,4 +1,4 @@
-import { throwErrors, toError } from '../_internal/errors';
+import { throwErrors, toError } from '../_internal/_errors';
 import type {
   DetailArgs,
   EventDispatcherLike,
