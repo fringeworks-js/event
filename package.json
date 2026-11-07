@@ -1,6 +1,6 @@
 {
   "name": "@fringeworks/event",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "private": true,
   "description": "A library some will find handy, for simple event handling.",
   "keywords": [
@@ -31,7 +31,7 @@
     "tidy": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json}\" --config ./prettier.tidy.config.ts"
   },
   "devDependencies": {
-    "@fringeworks/dev": "^0.13.2",
+    "@fringeworks/dev": "^0.13.3",
     "@types/node": "^25.9.9",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.12.0",
